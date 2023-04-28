@@ -62,7 +62,7 @@ using namespace std;
 
 typedef pcl::PointXYZI PointType;
 
-enum class SensorType { VELODYNE, OUSTER, LIVOX };
+enum class SensorType { VELODYNE, OUSTER, LIVOX, ROBOSENSE, MULRAN };
 
 class ParamServer : public rclcpp::Node
 {
@@ -96,10 +96,13 @@ public:
     int N_SCAN;
     int Horizon_SCAN;
     int downsampleRate;
+    int pointFilterNum;
     float lidarMinRange;
     float lidarMaxRange;
 
     // IMU
+    int imuType;
+    float imuRate;
     float imuAccNoise;
     float imuGyrNoise;
     float imuAccBiasN;
@@ -114,16 +117,12 @@ public:
     Eigen::Vector3d extTrans;
     Eigen::Quaterniond extQRPY;
 
-    // LOAM
-    float edgeThreshold;
-    float surfThreshold;
-    int edgeFeatureMinValidNum;
-    int surfFeatureMinValidNum;
 
     // voxel filter paprams
-    float odometrySurfLeafSize;
-    float mappingCornerLeafSize;
+
     float mappingSurfLeafSize ;
+    float surroundingKeyframeMapLeafSize;
+    float loopClosureICPSurfLeafSize ;
 
     float z_tollerance;
     float rotation_tollerance;
@@ -215,11 +214,17 @@ public:
         get_parameter("Horizon_SCAN", Horizon_SCAN);
         declare_parameter("downsampleRate", 1);
         get_parameter("downsampleRate", downsampleRate);
+        declare_parameter("pointFilterNum", 3);
+        get_parameter("pointFilterNum", pointFilterNum);
         declare_parameter("lidarMinRange", 5.5);
         get_parameter("lidarMinRange", lidarMinRange);
         declare_parameter("lidarMaxRange", 1000.0);
         get_parameter("lidarMaxRange", lidarMaxRange);
 
+        declare_parameter("imuRate", 500.0);
+        get_parameter("imuRate", imuRate);
+        declare_parameter("imuType", 0);
+        get_parameter("imuType", imuType);
         declare_parameter("imuAccNoise", 9e-4);
         get_parameter("imuAccNoise", imuAccNoise);
         declare_parameter("imuGyrNoise", 1.6e-4);
@@ -251,28 +256,18 @@ public:
         extTrans = Eigen::Map<const Eigen::Matrix<double, -1, -1, Eigen::RowMajor>>(extTransV.data(), 3, 1);
         extQRPY = Eigen::Quaterniond(extRPY);
 
-        declare_parameter("edgeThreshold", 1.0);
-        get_parameter("edgeThreshold", edgeThreshold);
-        declare_parameter("surfThreshold", 0.1);
-        get_parameter("surfThreshold", surfThreshold);
-        declare_parameter("edgeFeatureMinValidNum", 10);
-        get_parameter("edgeFeatureMinValidNum", edgeFeatureMinValidNum);
-        declare_parameter("surfFeatureMinValidNum", 100);
-        get_parameter("surfFeatureMinValidNum", surfFeatureMinValidNum);
 
-        declare_parameter("odometrySurfLeafSize", 0.4);
-        get_parameter("odometrySurfLeafSize", odometrySurfLeafSize);
-        declare_parameter("mappingCornerLeafSize", 0.2);
-        get_parameter("mappingCornerLeafSize", mappingCornerLeafSize);
-        declare_parameter("mappingSurfLeafSize", 0.4);
+        declare_parameter("mappingSurfLeafSize", 0.2);
         get_parameter("mappingSurfLeafSize", mappingSurfLeafSize);
-
-        declare_parameter("z_tollerance", 1000.0);
+        declare_parameter("surroundingKeyframeMapLeafSize", 0.2);
+        get_parameter("surroundingKeyframeMapLeafSize", surroundingKeyframeMapLeafSize);
+        
+        declare_parameter("z_tollerance", __FLT_MAX__);
         get_parameter("z_tollerance", z_tollerance);
-        declare_parameter("rotation_tollerance", 1000.0);
+        declare_parameter("rotation_tollerance", __FLT_MAX__);
         get_parameter("rotation_tollerance", rotation_tollerance);
 
-        declare_parameter("numberOfCores", 4);
+        declare_parameter("numberOfCores", 2);
         get_parameter("numberOfCores", numberOfCores);
         declare_parameter("mappingProcessInterval", 0.15);
         get_parameter("mappingProcessInterval", mappingProcessInterval);
@@ -281,32 +276,12 @@ public:
         get_parameter("surroundingkeyframeAddingDistThreshold", surroundingkeyframeAddingDistThreshold);
         declare_parameter("surroundingkeyframeAddingAngleThreshold", 0.2);
         get_parameter("surroundingkeyframeAddingAngleThreshold", surroundingkeyframeAddingAngleThreshold);
-        declare_parameter("surroundingKeyframeDensity", 2.0);
+        declare_parameter("surroundingKeyframeDensity", 1.0);
         get_parameter("surroundingKeyframeDensity", surroundingKeyframeDensity);
+        declare_parameter("loopClosureICPSurfLeafSize", 0.3);
+        get_parameter("loopClosureICPSurfLeafSize", loopClosureICPSurfLeafSize);
         declare_parameter("surroundingKeyframeSearchRadius", 50.0);
         get_parameter("surroundingKeyframeSearchRadius", surroundingKeyframeSearchRadius);
-
-        declare_parameter("loopClosureEnableFlag", true);
-        get_parameter("loopClosureEnableFlag", loopClosureEnableFlag);
-        declare_parameter("loopClosureFrequency", 1.0);
-        get_parameter("loopClosureFrequency", loopClosureFrequency);
-        declare_parameter("surroundingKeyframeSize", 50);
-        get_parameter("surroundingKeyframeSize", surroundingKeyframeSize);
-        declare_parameter("historyKeyframeSearchRadius", 15.0);
-        get_parameter("historyKeyframeSearchRadius", historyKeyframeSearchRadius);
-        declare_parameter("historyKeyframeSearchTimeDiff", 30.0);
-        get_parameter("historyKeyframeSearchTimeDiff", historyKeyframeSearchTimeDiff);
-        declare_parameter("historyKeyframeSearchNum", 25);
-        get_parameter("historyKeyframeSearchNum", historyKeyframeSearchNum);
-        declare_parameter("historyKeyframeFitnessScore", 0.3);
-        get_parameter("historyKeyframeFitnessScore", historyKeyframeFitnessScore);
-
-        declare_parameter("globalMapVisualizationSearchRadius", 1000.0);
-        get_parameter("globalMapVisualizationSearchRadius", globalMapVisualizationSearchRadius);
-        declare_parameter("globalMapVisualizationPoseDensity", 10.0);
-        get_parameter("globalMapVisualizationPoseDensity", globalMapVisualizationPoseDensity);
-        declare_parameter("globalMapVisualizationLeafSize", 1.0);
-        get_parameter("globalMapVisualizationLeafSize", globalMapVisualizationLeafSize);
 
         usleep(100);
     }
@@ -326,18 +301,21 @@ public:
         imu_out.angular_velocity.x = gyr.x();
         imu_out.angular_velocity.y = gyr.y();
         imu_out.angular_velocity.z = gyr.z();
-        // rotate roll pitch yaw
-        Eigen::Quaterniond q_from(imu_in.orientation.w, imu_in.orientation.x, imu_in.orientation.y, imu_in.orientation.z);
-        Eigen::Quaterniond q_final = q_from * extQRPY;
-        imu_out.orientation.x = q_final.x();
-        imu_out.orientation.y = q_final.y();
-        imu_out.orientation.z = q_final.z();
-        imu_out.orientation.w = q_final.w();
+        
+        if (imuType) {
+            // rotate roll pitch yaw
+            Eigen::Quaterniond q_from(imu_in.orientation.w, imu_in.orientation.x, imu_in.orientation.y, imu_in.orientation.z);
+            Eigen::Quaterniond q_final = q_from * extQRPY;
+            imu_out.orientation.x = q_final.x();
+            imu_out.orientation.y = q_final.y();
+            imu_out.orientation.z = q_final.z();
+            imu_out.orientation.w = q_final.w();
 
-        if (sqrt(q_final.x()*q_final.x() + q_final.y()*q_final.y() + q_final.z()*q_final.z() + q_final.w()*q_final.w()) < 0.1)
-        {
-            RCLCPP_ERROR(get_logger(), "Invalid quaternion, please use a 9-axis IMU!");
-            rclcpp::shutdown();
+            if (sqrt(q_final.x()*q_final.x() + q_final.y()*q_final.y() + q_final.z()*q_final.z() + q_final.w()*q_final.w()) < 0.1)
+            {
+                RCLCPP_ERROR(get_logger(),"Invalid quaternion, please use a 9-axis IMU!");
+                rclcpp::shutdown();
+            }
         }
 
         return imu_out;
@@ -392,18 +370,6 @@ void imuRPY2rosRPY(sensor_msgs::msg::Imu *thisImuMsg, T *rosRoll, T *rosPitch, T
     *rosRoll = imuRoll;
     *rosPitch = imuPitch;
     *rosYaw = imuYaw;
-}
-
-
-float pointDistance(PointType p)
-{
-    return sqrt(p.x*p.x + p.y*p.y + p.z*p.z);
-}
-
-
-float pointDistance(PointType p1, PointType p2)
-{
-    return sqrt((p1.x-p2.x)*(p1.x-p2.x) + (p1.y-p2.y)*(p1.y-p2.y) + (p1.z-p2.z)*(p1.z-p2.z));
 }
 
 rmw_qos_profile_t qos_profile{
